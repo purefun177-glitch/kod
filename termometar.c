@@ -14,7 +14,7 @@
  *
  * NAPOMENA: Prije pokretanja provjeriti ID senzora komandom:
  *   ls /sys/bus/w1/devices/
- * i upisati ga u define SENSOR_ID ispod (bez "28-00000")
+ * i upisati pun ID u define SENSOR_ID ispod
  */
 
 #include <stdio.h>
@@ -25,8 +25,8 @@
 #include <wiringPi.h>
 #include <lcd.h>
 
-/* ---- Podesiti ID senzora ---- */
-#define SENSOR_ID   "28-00000d45c605"
+/* ---- Podesiti pun ID senzora (npr. "28-00000e723360") ---- */
+#define SENSOR_ID   "28-00000e723360"
 
 /* ---- Pinovi za LCD (wiringPi oznake, 4-bitni mod kao na DVK512) ---- */
 #define LCD_RS      3
@@ -66,6 +66,7 @@ double ocitaj_temperaturu(void)
     FILE *ft;
     long vrijednost;
 
+    /* POPRAVLJENO: koristimo pun SENSOR_ID bez dupliranja prefiksa */
     snprintf(putanja, sizeof(putanja),
              "/sys/bus/w1/devices/%s/w1_slave", SENSOR_ID);
 
@@ -201,6 +202,16 @@ void *nit_tasteri(void *arg)
     pinMode(KEY1, INPUT);
     pinMode(KEY2, INPUT);
 
+    /* POPRAVLJENO: aktiviraj interne pull-up otpornike
+     * Bez ovoga pinovi "lebde" i mogu čitati LOW odmah pri pokretanju,
+     * što uzrokuje lažni pritisak tastera (posebno KEY2 = izlaz) */
+    pullUpDnControl(KEY0, PUD_UP);
+    pullUpDnControl(KEY1, PUD_UP);
+    pullUpDnControl(KEY2, PUD_UP);
+
+    /* Sačekaj da se pinovi stabilizuju nakon aktivacije pull-up */
+    delay(100);
+
     while (!g_kraj) {
 
         /* KEY0 - povećaj prag */
@@ -209,7 +220,7 @@ void *nit_tasteri(void *arg)
             /* taster pritisnut (padajuća ivica) */
             if (g_prag < 125.0) {
                 g_prag += 1.0;
-                printf("Prag povećan na: %.1f C\n", g_prag);
+                printf("Prag povecán na: %.1f C\n", g_prag);
             }
         }
         stanje_key0 = trenutno;
