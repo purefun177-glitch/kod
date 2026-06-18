@@ -1,8 +1,8 @@
 /*
  * Termometar sa alarmom na LCD-u
- * Prag se podešava tasterima KEY0 i KEY1 na DVK512 pločici
+ * Prag se podešava tasterima KEY3 i KEY1 na DVK512 pločici
  *
- * KEY0 (wiringPi pin 21) - povećava prag za 1°C
+ * KEY3 (wiringPi pin 29) - povećava prag za 1°C   [ZAMIJENJEN KEY0 -> KEY3]
  * KEY1 (wiringPi pin 22) - smanjuje prag za 1°C
  * KEY2 (wiringPi pin 23) - izlaz iz programa
  *
@@ -40,7 +40,7 @@
 #define LED_PIN     28
 
 /* ---- Tasteri na DVK512 (wiringPi oznake) ---- */
-#define KEY0        21    /* povećava prag */
+#define KEY3        29    /* povećava prag (zamjena za KEY0 koji nije radio) */
 #define KEY1        22    /* smanjuje prag */
 #define KEY2        23    /* izlaz         */
 
@@ -214,15 +214,15 @@ void *nit_lcd(void *arg)
 void *nit_tasteri(void *arg)
 {
     /* Stanja tastera: HIGH = nije pritisnut (pull-up) */
-    int prev0 = HIGH;
+    int prev3 = HIGH;  /* KEY3 - zamjena za KEY0 */
     int prev1 = HIGH;
     int prev2 = HIGH;
 
     /* Podesi tastere kao ulaze sa pull-up otpornicima */
-    pinMode(KEY0, INPUT);
+    pinMode(KEY3, INPUT);
     pinMode(KEY1, INPUT);
     pinMode(KEY2, INPUT);
-    pullUpDnControl(KEY0, PUD_UP);
+    pullUpDnControl(KEY3, PUD_UP);
     pullUpDnControl(KEY1, PUD_UP);
     pullUpDnControl(KEY2, PUD_UP);
 
@@ -230,17 +230,20 @@ void *nit_tasteri(void *arg)
     delay(200);
 
     /* Ucitaj pocetna stanja - sprijeci lazni pritisak pri startu */
-    prev0 = digitalRead(KEY0);
+    prev3 = digitalRead(KEY3);
     prev1 = digitalRead(KEY1);
     prev2 = digitalRead(KEY2);
 
+    printf("[DEBUG] Pocetno stanje KEY3(pin %d)=%d KEY1=%d KEY2=%d\n",
+           KEY3, prev3, prev1, prev2);
+
     while (!g_kraj) {
-        int curr0 = digitalRead(KEY0);
+        int curr3 = digitalRead(KEY3);
         int curr1 = digitalRead(KEY1);
         int curr2 = digitalRead(KEY2);
 
-        /* KEY0 - povecaj prag (padajuca ivica: HIGH->LOW) */
-        if (curr0 == LOW && prev0 == HIGH) {
+        /* KEY3 - povecaj prag (padajuca ivica: HIGH->LOW) */
+        if (curr3 == LOW && prev3 == HIGH) {
             pthread_mutex_lock(&g_mutex);
             if (g_prag < 125.0) {
                 g_prag += 1.0;
@@ -249,7 +252,7 @@ void *nit_tasteri(void *arg)
             pthread_mutex_unlock(&g_mutex);
             delay(50); /* debounce odmah nakon pritiska */
         }
-        prev0 = curr0;
+        prev3 = curr3;
 
         /* KEY1 - smanji prag */
         if (curr1 == LOW && prev1 == HIGH) {
@@ -310,7 +313,7 @@ int main(void)
     sleep(2);
 
     printf("Program pokrenut.\n");
-    printf("KEY0 = povecaj prag | KEY1 = smanji prag | KEY2 = izlaz\n\n");
+    printf("KEY3 = povecaj prag | KEY1 = smanji prag | KEY2 = izlaz\n\n");
 
     /* Pokretanje niti */
     pthread_create(&t_temp,    NULL, nit_temperatura, NULL);
