@@ -2,7 +2,7 @@
  * Termometar sa alarmom na LCD-u
  * Prag se podešava tasterima KEY3 i KEY1 na DVK512 pločici
  *
- * KEY3 (wiringPi pin 29) - povećava prag za 1°C   [ZAMIJENJEN KEY0 -> KEY3]
+ * KEY3 (wiringPi pin 24) - povećava prag za 1°C   [ZAMIJENJEN KEY0 -> KEY3]
  * KEY1 (wiringPi pin 22) - smanjuje prag za 1°C
  * KEY2 (wiringPi pin 23) - izlaz iz programa
  *
@@ -40,9 +40,10 @@
 #define LED_PIN     28
 
 /* ---- Tasteri na DVK512 (wiringPi oznake) ---- */
-#define KEY3        29    /* povećava prag (zamjena za KEY0 koji nije radio) */
+/* Pinovi potvrdjeni dijagnostikom na Raspberry Pi Zero 2 W: */
+#define KEY3        24    /* povećava prag (zamjena za KEY0 koji nije radio) */
 #define KEY1        22    /* smanjuje prag */
-#define KEY2        23    /* izlaz         */
+#define KEY2        23    /* izlaz */
 
 /* ---- Podrazumijevani prag alarma ---- */
 #define DEFAULT_THRESHOLD  30.0
@@ -233,9 +234,6 @@ void *nit_tasteri(void *arg)
     prev3 = digitalRead(KEY3);
     prev1 = digitalRead(KEY1);
     prev2 = digitalRead(KEY2);
-
-    printf("[DEBUG] Pocetno stanje KEY3(pin %d)=%d KEY1=%d KEY2=%d\n",
-           KEY3, prev3, prev1, prev2);
 
     while (!g_kraj) {
         int curr3 = digitalRead(KEY3);
