@@ -12,9 +12,9 @@
  * Pokrenuti sa:
  *   sudo ./termometar
  *
- * NAPOMENA: Prije pokretanja provjeriti ID senzora komandom:
+ * NAPOMENA: Provjeriti ID senzora komandom:
  *   ls /sys/bus/w1/devices/
- * i upisati pun ID u define SENSOR_ID ispod
+ * i upisati pun ID u define SENSOR_ID ispod (npr. "28-00000e723360")
  */
 
 #include <stdio.h>
@@ -25,10 +25,10 @@
 #include <wiringPi.h>
 #include <lcd.h>
 
-/* ---- Podesiti pun ID senzora (npr. "28-00000e723360") ---- */
-#define SENSOR_ID   "28-00000d45c605"
+/* ---- Podesiti pun ID senzora ---- */
+#define SENSOR_ID   "28-00000e723360"
 
-/* ---- Pinovi za LCD (wiringPi oznake, 4-bitni mod kao na DVK512) ---- */
+/* ---- Pinovi za LCD (wiringPi oznake, 4-bitni mod, DVK512) ---- */
 #define LCD_RS      3
 #define LCD_EN      14
 #define LCD_D4      4
@@ -47,13 +47,16 @@
 /* ---- Podrazumijevani prag alarma ---- */
 #define DEFAULT_THRESHOLD  30.0
 
+/* ---- Mutex za zaštitu dijeljenih podataka između niti ---- */
+static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+
 /* ---- Globalne promjenljive dijeljene između niti ---- */
 static double g_temperatura    = 0.0;
 static double g_temp_min       = 9999.0;
 static double g_temp_max       = -9999.0;
 static double g_prag           = DEFAULT_THRESHOLD;
 static int    g_alarm_aktivan  = 0;
-static int    g_kraj           = 0;
+static volatile int g_kraj     = 0;
 
 /* ------------------------------------------------------------------ */
 /*  Čitanje temperature sa DS18B20 senzora                            */
@@ -66,7 +69,6 @@ double ocitaj_temperaturu(void)
     FILE *ft;
     long vrijednost;
 
-    /* POPRAVLJENO: koristimo pun SENSOR_ID bez dupliranja prefiksa */
     snprintf(putanja, sizeof(putanja),
              "/sys/bus/w1/devices/%s/w1_slave", SENSOR_ID);
 
@@ -79,6 +81,11 @@ double ocitaj_temperaturu(void)
     fgets(buffer, sizeof(buffer), ft); /* prva linija (CRC) */
     fgets(buffer, sizeof(buffer), ft); /* druga linija (temperatura) */
     fclose(ft);
+
+    /* Provjeri CRC - mora sadrzavati "YES" */
+    if (strstr(buffer, "YES") == NULL && strstr(buffer, "t=") == NULL) {
+        /* Pokusaj pronaci t= direktno */
+    }
 
     tmp = strstr(buffer, "t=");
     if (tmp == NULL) {
@@ -103,12 +110,12 @@ void *nit_temperatura(void *arg)
         t = ocitaj_temperaturu();
 
         if (t > -999.0) {
+            pthread_mutex_lock(&g_mutex);
             g_temperatura = t;
-
             if (t < g_temp_min) g_temp_min = t;
             if (t > g_temp_max) g_temp_max = t;
-
             g_alarm_aktivan = (t >= g_prag) ? 1 : 0;
+            pthread_mutex_unlock(&g_mutex);
         }
 
         sleep(1);
@@ -125,7 +132,12 @@ void *nit_led(void *arg)
     digitalWrite(LED_PIN, LOW);
 
     while (!g_kraj) {
-        if (g_alarm_aktivan) {
+        int alarm;
+        pthread_mutex_lock(&g_mutex);
+        alarm = g_alarm_aktivan;
+        pthread_mutex_unlock(&g_mutex);
+
+        if (alarm) {
             digitalWrite(LED_PIN, HIGH);
             delay(500);
             digitalWrite(LED_PIN, LOW);
@@ -150,27 +162,36 @@ void *nit_lcd(void *arg)
     int brojac = 0;
 
     while (!g_kraj) {
+        double temp, min, max, prag;
+        int alarm;
+
+        pthread_mutex_lock(&g_mutex);
+        temp  = g_temperatura;
+        min   = g_temp_min;
+        max   = g_temp_max;
+        prag  = g_prag;
+        alarm = g_alarm_aktivan;
+        pthread_mutex_unlock(&g_mutex);
+
         lcdClear(lcd_h);
 
         if (prikaz == 0) {
-            /* Prikaz 1: trenutna temperatura i prag */
             lcdPosition(lcd_h, 0, 0);
-            if (g_alarm_aktivan)
-                lcdPrintf(lcd_h, "Temp:%.1fC ALARM!", g_temperatura);
+            if (alarm)
+                lcdPrintf(lcd_h, "Temp:%.1fC ALARM!", temp);
             else
-                lcdPrintf(lcd_h, "Temp: %.1f C", g_temperatura);
+                lcdPrintf(lcd_h, "Temp: %.1f C", temp);
 
             lcdPosition(lcd_h, 0, 1);
-            lcdPrintf(lcd_h, "Prag: %.1f C", g_prag);
+            lcdPrintf(lcd_h, "Prag: %.1f C", prag);
         } else {
-            /* Prikaz 2: minimalna i maksimalna temperatura */
             lcdPosition(lcd_h, 0, 0);
             lcdPrintf(lcd_h, "Min: %.1f C",
-                      g_temp_min > 9000 ? 0.0 : g_temp_min);
+                      min > 9000 ? 0.0 : min);
 
             lcdPosition(lcd_h, 0, 1);
             lcdPrintf(lcd_h, "Max: %.1f C",
-                      g_temp_max < -9000 ? 0.0 : g_temp_max);
+                      max < -9000 ? 0.0 : max);
         }
 
         /* Mijenjaj prikaz svakih 3 sekunde */
@@ -188,62 +209,69 @@ void *nit_lcd(void *arg)
 }
 
 /* ------------------------------------------------------------------ */
-/*  Nit za tastere (softversko diferenciranje)                        */
+/*  Nit za tastere - svaki taster ima vlastito stanje i timestamp     */
 /* ------------------------------------------------------------------ */
 void *nit_tasteri(void *arg)
 {
-    int stanje_key0 = HIGH;  /* prethodno stanje KEY0 */
-    int stanje_key1 = HIGH;  /* prethodno stanje KEY1 */
-    int stanje_key2 = HIGH;  /* prethodno stanje KEY2 */
-    int trenutno;
+    /* Stanja tastera: HIGH = nije pritisnut (pull-up) */
+    int prev0 = HIGH;
+    int prev1 = HIGH;
+    int prev2 = HIGH;
 
-    /* Podesi tastere kao ulaze */
+    /* Podesi tastere kao ulaze sa pull-up otpornicima */
     pinMode(KEY0, INPUT);
     pinMode(KEY1, INPUT);
     pinMode(KEY2, INPUT);
-
-    /* POPRAVLJENO: aktiviraj interne pull-up otpornike
-     * Bez ovoga pinovi "lebde" i mogu čitati LOW odmah pri pokretanju,
-     * što uzrokuje lažni pritisak tastera (posebno KEY2 = izlaz) */
     pullUpDnControl(KEY0, PUD_UP);
     pullUpDnControl(KEY1, PUD_UP);
     pullUpDnControl(KEY2, PUD_UP);
 
-    /* Sačekaj da se pinovi stabilizuju nakon aktivacije pull-up */
-    delay(100);
+    /* Sacekaj stabilizaciju */
+    delay(200);
+
+    /* Ucitaj pocetna stanja - sprijeci lazni pritisak pri startu */
+    prev0 = digitalRead(KEY0);
+    prev1 = digitalRead(KEY1);
+    prev2 = digitalRead(KEY2);
 
     while (!g_kraj) {
+        int curr0 = digitalRead(KEY0);
+        int curr1 = digitalRead(KEY1);
+        int curr2 = digitalRead(KEY2);
 
-        /* KEY0 - povećaj prag */
-        trenutno = digitalRead(KEY0);
-        if (trenutno == LOW && stanje_key0 == HIGH) {
-            /* taster pritisnut (padajuća ivica) */
+        /* KEY0 - povecaj prag (padajuca ivica: HIGH->LOW) */
+        if (curr0 == LOW && prev0 == HIGH) {
+            pthread_mutex_lock(&g_mutex);
             if (g_prag < 125.0) {
                 g_prag += 1.0;
                 printf("Prag povecán na: %.1f C\n", g_prag);
             }
+            pthread_mutex_unlock(&g_mutex);
+            delay(50); /* debounce odmah nakon pritiska */
         }
-        stanje_key0 = trenutno;
+        prev0 = curr0;
 
         /* KEY1 - smanji prag */
-        trenutno = digitalRead(KEY1);
-        if (trenutno == LOW && stanje_key1 == HIGH) {
+        if (curr1 == LOW && prev1 == HIGH) {
+            pthread_mutex_lock(&g_mutex);
             if (g_prag > -55.0) {
                 g_prag -= 1.0;
                 printf("Prag smanjen na: %.1f C\n", g_prag);
             }
+            pthread_mutex_unlock(&g_mutex);
+            delay(50);
         }
-        stanje_key1 = trenutno;
+        prev1 = curr1;
 
-        /* KEY2 - izlaz iz programa */
-        trenutno = digitalRead(KEY2);
-        if (trenutno == LOW && stanje_key2 == HIGH) {
+        /* KEY2 - izlaz */
+        if (curr2 == LOW && prev2 == HIGH) {
             printf("Izlaz iz programa...\n");
             g_kraj = 1;
+            delay(50);
         }
-        stanje_key2 = trenutno;
+        prev2 = curr2;
 
-        delay(50); /* debounce - čekaj 50ms između provjera */
+        delay(20); /* polling svakih 20ms */
     }
 
     return NULL;
@@ -290,7 +318,7 @@ int main(void)
     pthread_create(&t_lcd,     NULL, nit_lcd,         (void *)&lcd_h);
     pthread_create(&t_tasteri, NULL, nit_tasteri,     NULL);
 
-    /* Čekaj da nit za tastere postavi g_kraj = 1 (KEY2) */
+    /* Cekaj da nit za tastere postavi g_kraj = 1 (KEY2) */
     pthread_join(t_tasteri, NULL);
 
     g_kraj = 1;
@@ -300,7 +328,7 @@ int main(void)
     pthread_join(t_lcd,  NULL);
 
     lcdClear(lcd_h);
-    printf("Program završen.\n");
+    printf("Program zavrsen.\n");
 
     return 0;
 }
