@@ -26,7 +26,7 @@
 #include <lcd.h>
 
 /* ---- Podesiti ID senzora ---- */
-#define SENSOR_ID   "d45c605"
+#define SENSOR_ID   "28-00000d45c605"
 
 /* ---- Pinovi za LCD (wiringPi oznake, 4-bitni mod kao na DVK512) ---- */
 #define LCD_RS      3
@@ -67,7 +67,7 @@ double ocitaj_temperaturu(void)
     long vrijednost;
 
     snprintf(putanja, sizeof(putanja),
-             "/sys/bus/w1/devices/28-00000%s/w1_slave", SENSOR_ID);
+             "/sys/bus/w1/devices/%s/w1_slave", SENSOR_ID);
 
     ft = fopen(putanja, "r");
     if (ft == NULL) {
