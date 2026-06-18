@@ -26,7 +26,7 @@
 #include <lcd.h>
 
 /* ---- Podesiti pun ID senzora (npr. "28-00000e723360") ---- */
-#define SENSOR_ID   "28-00000e723360"
+#define SENSOR_ID   "28-00000d45c605"
 
 /* ---- Pinovi za LCD (wiringPi oznake, 4-bitni mod kao na DVK512) ---- */
 #define LCD_RS      3
